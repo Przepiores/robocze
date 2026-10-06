@@ -1,0 +1,21 @@
+{
+  "name": "kokpit",
+  "version": "0.1.0",
+  "description": "Side pane: what Claude is doing right now, session usage and limits, and whether this conversation belongs in Code, Cowork or Chat",
+  "author": { "name": "Przepiores" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "placeEnabled": {
+      "type": "boolean",
+      "title": "Doradca miejsca",
+      "description": "Ocenia, czy rozmowę lepiej prowadzić w Code, Coworku czy w chacie",
+      "default": true
+    },
+    "placeEvery": {
+      "type": "number",
+      "title": "Ocena miejsca co ile tur",
+      "description": "Jak często pytać mały model o ocenę tematu (prośby o dokumenty i maile sprawdzane są od razu)",
+      "default": 3
+    }
+  }
+}
