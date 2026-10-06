@@ -9,6 +9,9 @@ const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0,
 type Fork = { isAnswered: true; text: string; usage: typeof usage } | { isAnswered: false; reason: 'nothing-to-fork' }
 type Summary = { role: 'user'; text: string; toolUses: [] }
 
+/** Paths as the engine hands them over, on any OS: forward slashes, no drive (Windows turns /proj into C:\\proj). */
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+
 /** A fake project at /proj: files in memory, a git repo when /proj/.git exists, an answering fork. */
 function world(on: On, files: Map<string, string>, fork: Fork = { isAnswered: true, text: '## Cel\nZrobić handoff', usage }, summary: Summary[] = [{ role: 'user', text: 'Podsumowanie', toolUses: [] }]) {
   const toasts: string[] = []
@@ -22,9 +25,9 @@ function world(on: On, files: Map<string, string>, fork: Fork = { isAnswered: tr
   on('session.root', () => ({ value: '/proj' }))
   on('session.model', () => ({ value: 'opus' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000, tokens: 144_000, percent: 72 }, rateLimits: [] } }))
-  on('fs.exists', ($, e) => ({ value: files.has(e.path) }))
-  on('fs.read', ($, e) => ({ value: files.get(e.path) ?? '' }))
-  on('fs.write', ($, e) => { files.set(e.path, e.text); return { value: undefined } })
+  on('fs.exists', ($, e) => ({ value: files.has(norm(e.path)) }))
+  on('fs.read', ($, e) => ({ value: files.get(norm(e.path)) ?? '' }))
+  on('fs.write', ($, e) => { files.set(norm(e.path), e.text); return { value: undefined } })
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: Date.UTC(2026, 9, 6, 9, 0), isLink: false } }) as never)
   on('model.fork', () => ({ value: fork }))
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })

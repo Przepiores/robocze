@@ -23,6 +23,9 @@ type World = {
 /** Files of the fake machine: text and modification time. */
 type Disk = Map<string, { text: string; mtimeMs: number }>
 
+/** Paths as the engine hands them over, on any OS: forward slashes, no drive (Windows turns /proj into C:\\proj). */
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+
 const HOUR = 3_600_000
 const NOW = Date.UTC(2026, 9, 6, 18, 0)
 
@@ -39,18 +42,21 @@ function world(on: On, answers: (string | undefined)[], copy = true, disk: Disk 
   on('classic.SessionStart', () => ({}) as never)
   on('session.id', () => ({ value: 'current' }))
   on('env.get', ($, e) => ({ value: e.name === 'USERPROFILE' ? '/home/k' : undefined }))
-  on('fs.exists', ($, e) => ({ value: disk.has(e.path) || [...disk.keys()].some(k => k.startsWith(`${e.path}/`)) }))
-  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: 1, mtimeMs: disk.get(e.path)?.mtimeMs ?? 0, isLink: false } }) as never)
+  on('fs.exists', ($, e) => ({ value: disk.has(norm(e.path)) || [...disk.keys()].some(k => k.startsWith(`${norm(e.path)}/`)) }))
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: 1, mtimeMs: disk.get(norm(e.path))?.mtimeMs ?? 0, isLink: false } }) as never)
   on('fs.read', ($, e) => {
-    const file = disk.get(e.path)
+    const file = disk.get(norm(e.path))
     if (file === undefined) return { deny: 'missing' }
     return { value: file.text }
   })
-  on('fs.list', ($, e) => ({
-    value: [...disk.entries()]
-      .filter(([k]) => k.startsWith(`${e.path}/`) && !k.slice(e.path.length + 1).includes('/'))
-      .map(([k, f]) => ({ name: k.slice(e.path.length + 1), kind: 'file', size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })),
-  }) as never)
+  on('fs.list', ($, e) => {
+    const dir = norm(e.path)
+    return {
+      value: [...disk.entries()]
+        .filter(([k]) => k.startsWith(`${dir}/`) && !k.slice(dir.length + 1).includes('/'))
+        .map(([k, f]) => ({ name: k.slice(dir.length + 1), kind: 'file', size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })),
+    } as never
+  })
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'abc1234 feat(mods): add kokpit\ndef5678 docs: readme\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('model.complete', () => {
     completions += 1
@@ -82,7 +88,7 @@ function world(on: On, answers: (string | undefined)[], copy = true, disk: Disk 
     return { value: { isCopied: true } }
   })
   on('session.root', () => ({ value: '/proj' }))
-  on('fs.write', ($, e) => { written.set(e.path, e.text); return { value: undefined } })
+  on('fs.write', ($, e) => { written.set(norm(e.path), e.text); return { value: undefined } })
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })
   on('ui.log', ($, e) => { return { value: undefined } })
   return { toasts, copied, filled, ran, written, classified: () => classified, completions: () => completions, clock }
