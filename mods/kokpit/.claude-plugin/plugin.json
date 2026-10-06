@@ -1,7 +1,7 @@
 {
   "name": "kokpit",
-  "version": "0.1.0",
-  "description": "Side pane: what Claude is doing right now, session usage and limits, and whether this conversation belongs in Code, Cowork or Chat",
+  "version": "0.2.0",
+  "description": "Side pane: what Claude is doing, three suggested next prompts, recent work in the project, session usage and limits, and whether the conversation belongs in Code, Cowork or Chat",
   "author": { "name": "Przepiores" },
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -9,6 +9,12 @@
       "type": "boolean",
       "title": "Doradca miejsca",
       "description": "Ocenia, czy rozmowę lepiej prowadzić w Code, Coworku czy w chacie",
+      "default": true
+    },
+    "nextEnabled": {
+      "type": "boolean",
+      "title": "Propozycje „Co dalej?”",
+      "description": "Po każdej odpowiedzi mały model proponuje 3 następne prompty",
       "default": true
     },
     "placeEvery": {

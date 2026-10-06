@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import type { KokpitActivity, KokpitCall, KokpitPlace, KokpitSession } from '../types'
+import type { KokpitActivity, KokpitCall, KokpitNext, KokpitPlace, KokpitRecent, KokpitSession } from '../types'
 import {
   DEFAULT_EVERY,
   EDIT_TOOLS,
@@ -25,10 +25,14 @@ import {
   withEdit,
 } from './logic'
 import type { TurnSignal } from './logic'
+import { NEXT_SYSTEM, nextPrompt, parseSuggestions } from './next'
+import { dirOf, parseHandoff, pickSessions, projectSlug, sessionLine, sessionTitle } from './recent'
 
 const activity = atom({ plugin: 'kokpit', key: 'activity' } as const, EMPTY_ACTIVITY as KokpitActivity)
 const session = atom({ plugin: 'kokpit', key: 'session' } as const, null as KokpitSession | null)
 const place = atom({ plugin: 'kokpit', key: 'place' } as const, EMPTY_PLACE as KokpitPlace)
+const nextUp = atom({ plugin: 'kokpit', key: 'next' } as const, { items: [], isBusy: false } as KokpitNext)
+const recent = atom({ plugin: 'kokpit', key: 'recent' } as const, { handoff: null, sessions: [], commits: [] } as KokpitRecent)
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (ms: number) => {
@@ -43,6 +47,101 @@ type Memory = {
   turns: TurnSignal[]
   sinceCheck: number
   toastedFor: string | null
+  /** The last answered exchange, for "Co dalej?". */
+  last: { prompt: string; answer: string } | null
+  /** Where this project's transcripts live, from the SessionStart envelope. */
+  transcripts: string | null
+}
+
+/** Asks the small model for three next prompts after the last answer. */
+async function refreshNext($: EngineInterface, mem: Memory) {
+  if (mem.last === null) return
+  await update($, nextUp, n => ({ ...n, isBusy: true }))
+  try {
+    const { handoff } = await read($, recent)
+    const { files } = await read($, activity)
+    const reply = await $.model.complete({
+      model: 'haiku',
+      system: NEXT_SYSTEM,
+      prompt: nextPrompt({ ...mem.last, files: files.map(f => f.path), handoffNext: handoff?.next ?? [] }),
+      maxTokens: 300,
+      timeoutMs: 20_000,
+    })
+    const items = reply.isAnswered ? parseSuggestions(reply.text) : []
+    await update($, nextUp, n => ({ items: items.length > 0 ? items : n.items, isBusy: false }))
+  } catch (err) {
+    $.ui.log(`kokpit: propozycje nie wyszły (${String(err)})`, { to: 'debug' })
+    await update($, nextUp, n => ({ ...n, isBusy: false }))
+  }
+}
+
+/** Reads the project's latest handoff, recent commits and, with `withSessions`, earlier sessions. */
+async function refreshRecent($: EngineInterface, mem: Memory, withSessions: boolean) {
+  const now = await $.clock.now()
+  const root = (await $.session.root()).replace(/[\\/]+$/, '')
+  const value: Partial<KokpitRecent> = {}
+
+  try {
+    const latest = `${root}/.claude/handoffs/LATEST.md`
+    if (await $.fs.exists(latest)) {
+      const { mtimeMs } = await $.fs.stat(latest)
+      value.handoff = parseHandoff(await $.fs.read(latest), mtimeMs, now)
+    } else {
+      value.handoff = null
+    }
+  } catch (err) {
+    $.ui.log(`kokpit: handoff nieczytelny (${String(err)})`, { to: 'debug' })
+  }
+
+  try {
+    const log = await $.process.run(['git', 'log', '-3', '--format=%h %s'], { cwd: root, timeoutMs: 5000 })
+    value.commits = log.exitCode === 0 ? log.stdout.split(/\r?\n/).filter(l => l.trim() !== '') : []
+  } catch {
+    value.commits = []
+  }
+
+  if (withSessions) {
+    try {
+      const dir = mem.transcripts ?? (await transcriptsDir($, root))
+      if (dir !== null) {
+        const id = await $.session.id()
+        const picked = pickSessions(await $.fs.list(dir), id)
+        const lines = []
+        for (const entry of picked) {
+          let title: string | null = null
+          try {
+            title = sessionTitle(await $.fs.read(`${dir}/${entry.name}`))
+          } catch {
+            // Over 4 MiB or unreadable: listed without a title.
+          }
+          lines.push(sessionLine(title, entry.mtimeMs, now))
+        }
+        value.sessions = lines
+      }
+    } catch (err) {
+      $.ui.log(`kokpit: lista sesji nie wyszła (${String(err)})`, { to: 'debug' })
+    }
+  }
+
+  await update($, recent, r => ({ ...r, ...value }))
+}
+
+/** ~/.claude/projects/<slug> when the SessionStart envelope did not say where transcripts go. */
+async function transcriptsDir($: EngineInterface, root: string): Promise<string | null> {
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''}/.claude`
+  const dir = `${config.replace(/[\\/]+$/, '')}/projects/${projectSlug(root)}`
+  return (await $.fs.exists(dir)) ? dir : null
+}
+
+/** Loads the latest handoff into the conversation: through /handoff load when that mod is here, else as a prompt to send. */
+async function loadHandoff($: EngineInterface) {
+  const commands = await $.command.list()
+  if (commands.some(c => c.name === 'handoff')) {
+    const out = await $.command.run({ command: 'handoff', args: 'load' })
+    $.ui.toast(out.text ?? 'Handoff wczytany.')
+  } else {
+    await $.prompt.fill({ text: 'Przeczytaj .claude/handoffs/LATEST.md i kontynuuj od „Następnych kroków”.', mode: 'replace' })
+  }
 }
 
 /** Asks the small model where this conversation belongs and folds the answer into the pane. */
@@ -102,7 +201,8 @@ export const register: Register = (on, options) => {
   const every = Math.max(1, Math.round(typeof options.placeEvery === 'number' ? options.placeEvery : DEFAULT_EVERY))
 
   // What the place advisor remembers of the session; a reload starts it over, which only delays the next verdict.
-  const mem: Memory = { typed: null, current: null, turns: [], sinceCheck: 0, toastedFor: null }
+  const mem: Memory = { typed: null, current: null, turns: [], sinceCheck: 0, toastedFor: null, last: null, transcripts: null }
+  const isNextOn = options.nextEnabled !== false
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'kokpit', description: 'Otwórz panel Kokpit' })
@@ -111,6 +211,16 @@ export const register: Register = (on, options) => {
     }
     // Unasked, the pane seats from 144 columns and waits below that; /kokpit opens it at any width.
     void $.ui.open({ id: PANE, title: 'Kokpit' })
+    $.clock.after(0, () => void refreshRecent($, mem, true))
+    return next(e)
+  })
+
+  // The settings hooks' SessionStart envelope says where this session's transcript lives: its folder holds the project's sessions.
+  on('classic.SessionStart', ($, e, next) => {
+    if (typeof e.transcript_path === 'string' && e.transcript_path !== '' && mem.transcripts === null) {
+      mem.transcripts = dirOf(e.transcript_path)
+      $.clock.after(0, () => void refreshRecent($, mem, true))
+    }
     return next(e)
   })
 
@@ -181,6 +291,12 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     await update($, activity, a => ({ ...a, isRunning: false, agents: [] }))
 
+    if (mem.current !== null && !e.isAborted && e.answer.trim() !== '') {
+      mem.last = { prompt: mem.current.prompt, answer: e.answer }
+      if (isNextOn) $.clock.after(0, () => void refreshNext($, mem))
+    }
+    $.clock.after(0, () => void refreshRecent($, mem, false))
+
     if (mem.current !== null) {
       mem.turns = [...mem.turns, mem.current].slice(-6)
       mem.sinceCheck += 1
@@ -213,6 +329,9 @@ export const register: Register = (on, options) => {
     const a = await read($, activity)
     const s = await read($, session)
     const p = await read($, place)
+    const n = await read($, nextUp)
+    const r = await read($, recent)
+    const hasRecent = r.handoff !== null || r.sessions.length > 0 || r.commits.length > 0
 
     const status = a.isRunning
       ? <Text color="yellow">● pracuje · tura {a.turn} · krok {a.steps}</Text>
@@ -235,6 +354,31 @@ export const register: Register = (on, options) => {
         {a.agents.map((name, i) => <Text key={`agent:${i}`} wrap="truncate-end" color="cyan">↳ {name}</Text>)}
         {a.files.length > 0 && <Text dimColor>Pliki w sesji:</Text>}
         {a.files.map(f => <Text key={`file:${f.path}`} wrap="truncate-end"> {f.path} ×{f.edits}</Text>)}
+
+        {isNextOn && <Text> </Text>}
+        {isNextOn && <Text bold>CO DALEJ?</Text>}
+        {isNextOn && n.isBusy && <Text dimColor>układam propozycje…</Text>}
+        {isNextOn && !n.isBusy && n.items.length === 0 && <Text dimColor>propozycje po pierwszej odpowiedzi</Text>}
+        {isNextOn && n.items.map((item, i) => (
+          <Button key={`next:${i}`} label={item} onPress={() => $.prompt.fill({ text: item, mode: 'replace' })} />
+        ))}
+        {isNextOn && n.items.length > 0 && !n.isBusy && (
+          <Button key="next:refresh" label="Inne propozycje" plain onPress={() => void $.clock.after(0, () => void refreshNext($, mem))} />
+        )}
+
+        <Text> </Text>
+        <Text bold>OSTATNIO W PROJEKCIE</Text>
+        {!hasRecent && <Text dimColor>brak handoffu, poprzednich sesji i commitów</Text>}
+        {r.handoff !== null && <Text>Handoff z {r.handoff.when}</Text>}
+        {r.handoff?.goal != null && <Text dimColor wrap="truncate-end"> Cel: {r.handoff.goal}</Text>}
+        {r.handoff !== null && r.handoff.next[0] !== undefined && <Text wrap="truncate-end"> Dalej: {r.handoff.next[0]}</Text>}
+        {r.handoff?.open != null && <Text color="yellow" wrap="truncate-end"> Otwarte: {r.handoff.open}</Text>}
+        {r.handoff !== null && <Button key="handoff:load" label="Wczytaj handoff" onPress={() => void $.clock.after(0, () => void loadHandoff($))} />}
+        {r.sessions.length > 0 && <Text dimColor>Poprzednie sesje:</Text>}
+        {r.sessions.map((x, i) => <Text key={`session:${i}`} wrap="truncate-end"> {x.when} · {x.title}</Text>)}
+        {r.sessions.length > 0 && <Button key="resume" label="Wróć do sesji (/resume)" plain onPress={() => $.prompt.fill({ text: '/resume', mode: 'replace' })} />}
+        {r.commits.length > 0 && <Text dimColor>Ostatnie commity:</Text>}
+        {r.commits.map((c, i) => <Text key={`commit:${i}`} wrap="truncate-end"> {c}</Text>)}
 
         <Text> </Text>
         <Text bold>SESJA</Text>

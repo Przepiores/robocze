@@ -48,12 +48,38 @@ export type KokpitPlace = {
   transfer: string | null
 }
 
+/** Three proposed next prompts after the last answer. */
+export type KokpitNext = {
+  items: string[]
+  isBusy: boolean
+}
+
+/** The handoff mod's LATEST.md, as the pane shows it. */
+export type KokpitHandoff = {
+  when: string
+  goal: string | null
+  next: string[]
+  open: string | null
+}
+
+export type KokpitSessionLine = { when: string; title: string }
+
+export type KokpitRecent = {
+  handoff: KokpitHandoff | null
+  /** Earlier sessions in this project, newest first. */
+  sessions: KokpitSessionLine[]
+  /** `abc1234 feat: …`, newest first. */
+  commits: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
     kokpit: {
       activity: KokpitActivity
       session: KokpitSession | null
       place: KokpitPlace
+      next: KokpitNext
+      recent: KokpitRecent
     }
   }
 }

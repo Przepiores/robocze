@@ -6,7 +6,7 @@ Mody do Claude Code (terminal albo zakładka Code w Claude Desktop):
 | --- | --- |
 | [`mods/handoff`](mods/handoff) | Przy 70% kontekstu przypomina o `/handoff`, który zapisuje stan pracy do `.claude/handoffs/` |
 | [`mods/model-hint`](mods/model-hint) | Proste prompty idą na jedną turę z Opusa na Sonnet albo Haiku, żeby oszczędzać limit |
-| [`mods/kokpit`](mods/kokpit) | Panel boczny: co robi Claude, kontekst i limity, ocena czy rozmowa pasuje do Code, Coworka czy chatu |
+| [`mods/kokpit`](mods/kokpit) | Panel boczny: co robi Claude, 3 propozycje „co dalej”, ostatnia praca w projekcie, kontekst i limity, ocena czy rozmowa pasuje do Code, Coworka czy chatu |
 
 Wszystkie naraz:
 

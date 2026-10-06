@@ -3,19 +3,62 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { EMPTY_PLACE, PLACE_LABELS, classifierText, decide, isChatty, isOfficeAsk, labelFor, limitsFrom, shortPath, withEdit } from './logic'
+import { nextPrompt, parseSuggestions } from './next'
+import { parseHandoff, pickSessions, projectSlug, sessionTitle, when } from './recent'
 
 const label = (place: 'code' | 'cowork' | 'chat') => Object.keys(PLACE_LABELS).find(k => PLACE_LABELS[k] === place)
 const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
-type World = { toasts: string[]; copied: string[]; written: Map<string, string>; classified: () => number; clock: ReturnType<typeof mock.clock> }
+type World = {
+  toasts: string[]
+  copied: string[]
+  filled: string[]
+  ran: string[]
+  written: Map<string, string>
+  classified: () => number
+  completions: () => number
+  clock: ReturnType<typeof mock.clock>
+}
+
+/** Files of the fake machine: text and modification time. */
+type Disk = Map<string, { text: string; mtimeMs: number }>
+
+const HOUR = 3_600_000
+const NOW = Date.UTC(2026, 9, 6, 18, 0)
 
 /** A session whose classifier answers from `answers` in turn (the last one repeats). */
-function world(on: On, answers: (string | undefined)[], copy = true): World {
+function world(on: On, answers: (string | undefined)[], copy = true, disk: Disk = new Map(), commands: string[] = []): World {
   const toasts: string[] = []
   const copied: string[] = []
   const written = new Map<string, string>()
+  const filled: string[] = []
+  const ran: string[] = []
   let classified = 0
-  const clock = mock.clock(on, { now: Date.UTC(2026, 9, 6, 18, 0) })
+  let completions = 0
+  const clock = mock.clock(on, { now: NOW })
+  on('classic.SessionStart', () => ({}) as never)
+  on('session.id', () => ({ value: 'current' }))
+  on('env.get', ($, e) => ({ value: e.name === 'USERPROFILE' ? '/home/k' : undefined }))
+  on('fs.exists', ($, e) => ({ value: disk.has(e.path) || [...disk.keys()].some(k => k.startsWith(`${e.path}/`)) }))
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: 1, mtimeMs: disk.get(e.path)?.mtimeMs ?? 0, isLink: false } }) as never)
+  on('fs.read', ($, e) => {
+    const file = disk.get(e.path)
+    if (file === undefined) return { deny: 'missing' }
+    return { value: file.text }
+  })
+  on('fs.list', ($, e) => ({
+    value: [...disk.entries()]
+      .filter(([k]) => k.startsWith(`${e.path}/`) && !k.slice(e.path.length + 1).includes('/'))
+      .map(([k, f]) => ({ name: k.slice(e.path.length + 1), kind: 'file', size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })),
+  }) as never)
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'abc1234 feat(mods): add kokpit\ndef5678 docs: readme\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('model.complete', () => {
+    completions += 1
+    return { value: { isAnswered: true, text: '1. Uruchom testy kokpitu\n- Zrób commit zmian\n„Dopisz sekcję do README”', usage } }
+  })
+  on('prompt.fill', ($, e) => { filled.push(e.text); return { isFilled: true } as never })
+  on('command.list', () => ({ value: commands.map(name => ({ name, description: '', source: 'plugin' })) }) as never)
+  on('command.run', ($, e) => { ran.push(`${e.command} ${e.args}`.trim()); return { text: 'Wczytano handoff.' } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -38,11 +81,11 @@ function world(on: On, answers: (string | undefined)[], copy = true): World {
     copied.push(e.text)
     return { value: { isCopied: true } }
   })
-  on('session.root', () => ({ value: 'C:\\proj' }))
+  on('session.root', () => ({ value: '/proj' }))
   on('fs.write', ($, e) => { written.set(e.path, e.text); return { value: undefined } })
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })
-  on('ui.log', () => ({ value: undefined }))
-  return { toasts, copied, written, classified: () => classified, clock }
+  on('ui.log', ($, e) => { return { value: undefined } })
+  return { toasts, copied, filled, ran, written, classified: () => classified, completions: () => completions, clock }
 }
 
 /** One typed prompt, a turn with the given tool calls, then its end; lets the deferred check run. */
@@ -113,6 +156,125 @@ describe('pane', () => {
   })
 })
 
+const HANDOFF = `# Handoff 2026-10-06 22:13
+
+_Model: opus, kontekst 72%_
+
+## Cel
+Mody handoff i model-hint do Claude Code
+
+## Zrobione
+- oba mody
+
+## Następne kroki
+1. Sprawdzić alias modelu w turn.step
+2. Dopisać README
+
+## Otwarte problemy i pułapki
+- strefa czasowa w nazwach plików
+`
+
+const transcript = (prompt: string) =>
+  [
+    JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: '<local-command-caveat>x' } }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  ].join('\n')
+
+describe('next and recent logic', () => {
+  test('suggestions lose numbering, bullets and quotes; at most three', () => {
+    expect(parseSuggestions('1. Uruchom testy\n- Zrób commit\n„Dopisz README”\n4. Czwarta')).toEqual(['Uruchom testy', 'Zrób commit', 'Dopisz README'])
+    expect(nextPrompt({ prompt: 'p', answer: 'a', files: ['x.ts'], handoffNext: ['krok'] })).toContain('- krok')
+  })
+
+  test('a handoff note reads as goal, next steps and open problems', () => {
+    const h = parseHandoff(HANDOFF, NOW - HOUR, NOW)
+    expect(h.goal).toBe('Mody handoff i model-hint do Claude Code')
+    expect(h.next).toEqual(['Sprawdzić alias modelu w turn.step', 'Dopisać README'])
+    expect(h.open).toBe('strefa czasowa w nazwach plików')
+  })
+
+  test('a session title skips meta lines; a summary wins', () => {
+    expect(sessionTitle(transcript('zrób panel boczny'))).toBe('zrób panel boczny')
+    expect(sessionTitle(`${JSON.stringify({ type: 'summary', summary: 'Kokpit' })}\n${transcript('x')}`)).toBe('Kokpit')
+  })
+
+  test('sessions: newest first, the current one left out', () => {
+    const picked = pickSessions([
+      { name: 'a.jsonl', kind: 'file', mtimeMs: 1 },
+      { name: 'current.jsonl', kind: 'file', mtimeMs: 9 },
+      { name: 'b.jsonl', kind: 'file', mtimeMs: 5 },
+      { name: 'notes.txt', kind: 'file', mtimeMs: 7 },
+    ], 'current')
+    expect(picked.map(p => p.name)).toEqual(['b.jsonl', 'a.jsonl'])
+  })
+
+  test('project slug and relative day', () => {
+    expect(projectSlug('C:\\Users\\K\\robocze')).toBe('C--Users-K-robocze')
+    expect(when(NOW - 24 * HOUR, NOW)).toContain('wczoraj')
+  })
+})
+
+describe('co dalej?', () => {
+  test('three suggestions after an answer; a press puts one in the prompt box', async ($, on) => {
+    const w = world(on, [label('code')])
+    await turn($, w, 'dopisz obsługę błędów w module handoff', [{ tool: 'Edit', file_path: '/r/a.ts' }])
+    expect(w.completions()).toBe(1)
+    const ui = await mountPane($)
+    expect(await ui.find({ key: 'next:2' })).toBeDefined()
+    await ui.press({ key: 'next:1' })
+    expect(w.filled).toEqual(['Zrób commit zmian'])
+  })
+
+  test('can be switched off', { options: { nextEnabled: false } }, async ($, on) => {
+    const w = world(on, [label('code')])
+    await turn($, w, 'dopisz obsługę błędów w module handoff')
+    expect(w.completions()).toBe(0)
+  })
+})
+
+describe('ostatnio w projekcie', () => {
+  const disk = (): Disk => new Map([
+    ['/proj/.claude/handoffs/LATEST.md', { text: HANDOFF, mtimeMs: NOW - HOUR }],
+    ['/home/k/.claude/projects/-proj/old.jsonl', { text: transcript('mody do claude code'), mtimeMs: NOW - 30 * HOUR }],
+    ['/home/k/.claude/projects/-proj/current.jsonl', { text: transcript('teraz'), mtimeMs: NOW }],
+  ])
+
+  test('shows the handoff, earlier sessions and commits', async ($, on) => {
+    const w = world(on, [label('code')], true, disk())
+    await $.classic.SessionStart({ source: 'startup', transcript_path: '/home/k/.claude/projects/-proj/current.jsonl' } as never)
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    await w.clock.advance(10)
+    const ui = await mountPane($)
+    expect(await ui.find({ text: /Cel: Mody handoff/ })).toBeDefined()
+    expect(await ui.find({ text: /Dalej: Sprawdzić alias/ })).toBeDefined()
+    expect(await ui.find({ text: /Otwarte: strefa czasowa/ })).toBeDefined()
+    expect(await ui.find({ text: /mody do claude code/ })).toBeDefined()
+    expect(await ui.find({ text: /· teraz/ })).toBeUndefined()
+    expect(await ui.find({ text: /abc1234 feat\(mods\)/ })).toBeDefined()
+  })
+
+  test('“Wczytaj handoff” runs /handoff load when the handoff mod is there', async ($, on) => {
+    const w = world(on, [label('code')], true, disk(), ['handoff'])
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    await w.clock.advance(10)
+    const ui = await mountPane($)
+    await ui.press({ key: 'handoff:load' })
+    await w.clock.advance(10)
+    expect(w.ran).toEqual(['handoff load'])
+  })
+
+  test('without the handoff mod it proposes a prompt instead', async ($, on) => {
+    const w = world(on, [label('code')], true, disk())
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    await w.clock.advance(10)
+    const ui = await mountPane($)
+    await ui.press({ key: 'handoff:load' })
+    await w.clock.advance(10)
+    expect(w.filled[0]).toContain('LATEST.md')
+  })
+})
+
 describe('surfaces', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
     test(`the chat suggestion with its link draws on ${surface}`, async ($, on) => {
@@ -163,7 +325,7 @@ describe('place advisor', () => {
     const ui = await mountPane($)
     await ui.press({ key: 'move' })
     await w.clock.advance(10)
-    expect([...w.written.keys()][0]).toContain('C:\\proj/.claude/handoffs/przeniesienie-')
+    expect([...w.written.keys()][0]).toContain('/proj/.claude/handoffs/przeniesienie-')
   })
 
   test('“Zostaję w Code” hides the suggestion', async ($, on) => {
