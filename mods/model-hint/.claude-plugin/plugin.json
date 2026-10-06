@@ -1,0 +1,20 @@
+{
+  "name": "model-hint",
+  "version": "0.1.0",
+  "description": "Routes simple prompts from Opus to Sonnet or Haiku for one turn, to save the Opus limit",
+  "author": { "name": "Przepiores" },
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Automatyczne przełączanie",
+      "description": "Proste prompty idą na tańszy model (tylko ta tura)",
+      "default": true
+    },
+    "maxContext": {
+      "type": "number",
+      "title": "Maks. kontekst do przełączenia (%)",
+      "description": "Powyżej tego zapełnienia tańszy model czytałby cały kontekst bez cache, więc tura zostaje na Opusie",
+      "default": 30
+    }
+  }
+}
