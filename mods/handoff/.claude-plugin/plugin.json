@@ -1,0 +1,17 @@
+{
+  "name": "handoff",
+  "version": "0.1.0",
+  "description": "Warns when the context window passes a threshold and saves a work handoff to .claude/handoffs/ with /handoff",
+  "author": {
+    "name": "Przepiores"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "threshold": {
+      "type": "number",
+      "title": "Próg ostrzeżenia (%)",
+      "description": "Przy jakim zapełnieniu kontekstu pokazać toast z propozycją /handoff",
+      "default": 70
+    }
+  }
+}
