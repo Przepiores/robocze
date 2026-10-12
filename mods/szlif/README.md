@@ -87,3 +87,4 @@ claude plugin test mods/szlif
 | `hooks/logic.ts` | Znaczniki `--`/`++`, filtr promptów, prompty dla modelu, parsowanie JSON, kanał Kokpitu |
 | `hooks/register.test.ts` | Testy logiki, podglądu, auto, wywiadu, przepuszczania, `/szlif` i kanału Kokpitu (20) |
 | `types/index.d.ts` | Kontrakt stanu `szlif.status` i typ prośby z Kokpitu |
+| `TESTING.md` | Test na żywo szlifu i Kokpitu w Claude Code: przygotowanie, 22 kroki, raport |
