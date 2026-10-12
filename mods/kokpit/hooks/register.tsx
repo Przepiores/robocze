@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import type { KokpitActivity, KokpitCall, KokpitNext, KokpitPlace, KokpitRecent, KokpitSession } from '../types'
+import type { KokpitActivity, KokpitCall, KokpitNext, KokpitPlace, KokpitRecent, KokpitSession, KokpitSzlifAsk, KokpitSzlifDeliver, KokpitSzlifMode } from '../types'
 import {
   DEFAULT_EVERY,
   EDIT_TOOLS,
@@ -27,12 +27,18 @@ import {
 import type { TurnSignal } from './logic'
 import { NEXT_SYSTEM, nextPrompt, parseSuggestions } from './next'
 import { dirOf, parseHandoff, pickSessions, projectSlug, sessionLine, sessionTitle } from './recent'
+import { SZLIF_DELIVERS, SZLIF_DELIVER_LABEL, SZLIF_HINT, SZLIF_MODES, SZLIF_MODE_LABEL, SZLIF_PHASE, szlifView } from './szlif'
 
 const activity = atom({ plugin: 'kokpit', key: 'activity' } as const, EMPTY_ACTIVITY as KokpitActivity)
 const session = atom({ plugin: 'kokpit', key: 'session' } as const, null as KokpitSession | null)
 const place = atom({ plugin: 'kokpit', key: 'place' } as const, EMPTY_PLACE as KokpitPlace)
 const nextUp = atom({ plugin: 'kokpit', key: 'next' } as const, { items: [], isBusy: false } as KokpitNext)
 const recent = atom({ plugin: 'kokpit', key: 'recent' } as const, { handoff: null, sessions: [], commits: [] } as KokpitRecent)
+const szlifAsk = atom({ plugin: 'kokpit', key: 'szlifAsk' } as const, null as KokpitSzlifAsk | null)
+/** The szlif mod's own value: any plugin reads it, only szlif writes it; not in this contract, hence the casts where it is read. */
+const SZLIF = { plugin: 'szlif', key: 'status' } as const
+
+type SzlifRequest = { action: 'mode'; value: KokpitSzlifMode } | { action: 'deliver'; value: KokpitSzlifDeliver } | { action: 'restore' }
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (ms: number) => {
@@ -51,6 +57,11 @@ type Memory = {
   last: { prompt: string; answer: string } | null
   /** Where this project's transcripts live, from the SessionStart envelope. */
   transcripts: string | null
+}
+
+/** Asks the szlif mod for a change: written under the pane's own name, which szlif watches. */
+async function askSzlif($: EngineInterface, request: SzlifRequest) {
+  await update($, szlifAsk, prev => ({ ...request, seq: (prev?.seq ?? 0) + 1 }) as KokpitSzlifAsk)
 }
 
 /** Asks the small model for three next prompts after the last answer. */
@@ -331,6 +342,7 @@ export const register: Register = (on, options) => {
     const p = await read($, place)
     const n = await read($, nextUp)
     const r = await read($, recent)
+    const z = szlifView(((await $.state.get(SZLIF as never)) as { value?: unknown }).value)
     const hasRecent = r.handoff !== null || r.sessions.length > 0 || r.commits.length > 0
 
     const status = a.isRunning
@@ -364,6 +376,39 @@ export const register: Register = (on, options) => {
         ))}
         {isNextOn && n.items.length > 0 && !n.isBusy && (
           <Button key="next:refresh" label="Inne propozycje" plain onPress={() => void $.clock.after(0, () => void refreshNext($, mem))} />
+        )}
+
+        {z !== null && <Text> </Text>}
+        {z !== null && <Text bold>SZLIF PROMPTU</Text>}
+        {z !== null && (
+          <Box key="szlif:modes" flexDirection="row" flexWrap="wrap" columnGap={1}>
+            {SZLIF_MODES.map(m => (
+              <Button
+                key={`szlif:mode:${m}`}
+                label={z.mode === m ? `● ${SZLIF_MODE_LABEL[m]}` : SZLIF_MODE_LABEL[m]}
+                {...(z.mode === m ? { variant: 'primary' as const } : { dimColor: true })}
+                onPress={() => askSzlif($, { action: 'mode', value: m })}
+              />
+            ))}
+          </Box>
+        )}
+        {z !== null && z.mode !== 'off' && (
+          <Box key="szlif:delivers" flexDirection="row" flexWrap="wrap" columnGap={1}>
+            {SZLIF_DELIVERS.map(d => (
+              <Button
+                key={`szlif:deliver:${d}`}
+                label={z.deliver === d ? `● ${SZLIF_DELIVER_LABEL[d]}` : SZLIF_DELIVER_LABEL[d]}
+                {...(z.deliver === d ? { variant: 'primary' as const } : { dimColor: true })}
+                onPress={() => askSzlif($, { action: 'deliver', value: d })}
+              />
+            ))}
+          </Box>
+        )}
+        {z !== null && z.phase === null && <Text dimColor wrap="wrap">{SZLIF_HINT[z.mode]}</Text>}
+        {z !== null && z.phase !== null && <Text color="yellow">✎ {SZLIF_PHASE[z.phase]}</Text>}
+        {z !== null && z.lastWhy !== null && <Text dimColor wrap="truncate-end">Ostatnio: {z.lastWhy}</Text>}
+        {z !== null && z.lastWhy !== null && (
+          <Button key="szlif:restore" label="Przywróć oryginał" plain onPress={() => askSzlif($, { action: 'restore' })} />
         )}
 
         <Text> </Text>

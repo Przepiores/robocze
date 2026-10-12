@@ -1,6 +1,6 @@
 # kokpit: panel boczny z podglądem pracy Claude'a
 
-Mod do Claude Code, który otwiera z boku panel **Kokpit** z pięcioma sekcjami.
+Mod do Claude Code, który otwiera z boku panel **Kokpit** z pięcioma sekcjami, a z modem [szlif](../szlif) z szóstą.
 
 ```
 TERAZ
@@ -16,6 +16,13 @@ CO DALEJ?
 [ Zrób commit zmian ]
 [ Dopisz sekcję do README ]
 Inne propozycje
+
+SZLIF PROMPTU
+[ Wył ] [ Szlif ] [ ● Wywiad ]
+[ ● Podgląd ] [ Auto ]
+dopytuje, gdy czegoś ważnego brakuje
+Ostatnio: dodane kryterium ukończenia
+Przywróć oryginał
 
 OSTATNIO W PROJEKCIE
 Handoff z wczoraj 22:13
@@ -46,6 +53,8 @@ Lepiej prowadzić w: Cowork
 **Teraz.** Na żywo pokazuje numer tury i krok (zapytanie do modelu), ostatnie 8 wywołań narzędzi z czasem i wynikiem (✓, ✗, ● w trakcie), uruchomionych subagentów oraz pliki edytowane w tej sesji. Nie generuje żadnych dodatkowych zapytań do modelu.
 
 **Co dalej?** Po każdej odpowiedzi szybki model (Haiku) czyta Twój ostatni prompt, końcówkę odpowiedzi, pliki zmienione w sesji i „Następne kroki” z ostatniego handoffu. Na tej podstawie proponuje 3 konkretne prompty. Kliknięcie wpisuje prompt do pola, a Ty go poprawiasz albo wysyłasz Enterem. **Inne propozycje** losuje nowe.
+
+**Szlif promptu** (tylko z włączonym modem [szlif](../szlif)). Przełącza tryb szlifu (`Wył`, `Szlif`, `Wywiad`) i wysyłkę (`Podgląd`, `Auto`) jednym kliknięciem, pokazuje na żywo, co szlif robi z promptem (czyta, czeka na odpowiedzi, składa), i ostatnią zmianę. **Przywróć oryginał** wstawia do pola prompt w wersji, którą wpisałeś. Bez moda szlif sekcji nie ma.
 
 **Ostatnio w projekcie.**
 - Skrót ostatniego handoffu (z moda handoff, plik `.claude/handoffs/LATEST.md`): kiedy, cel, pierwszy następny krok i otwarty problem. **Wczytaj handoff** uruchamia `/handoff load`; bez moda handoff wpisuje do pola prompt, który każe przeczytać ten plik.
@@ -100,6 +109,7 @@ claude plugin test mods/kokpit
 - Ocena miejsca: jedno małe zapytanie do szybkiego modelu co kilka tur.
 - Co dalej?: jedno małe zapytanie do Haiku po każdej odpowiedzi (wyłączysz to w ustawieniach).
 - Ostatnio w projekcie: zero zapytań do modelu, tylko odczyt plików i `git log`.
+- Szlif promptu: zero zapytań w Kokpicie; koszt szlifu opisuje README moda szlif.
 - Przeniesienie: jedno zapytanie do modelu sesji na bazie rozmowy (jak `/handoff`), tylko po kliknięciu.
 
 ## Pliki
@@ -111,5 +121,6 @@ claude plugin test mods/kokpit
 | `hooks/logic.ts` | Etykiety narzędzi, limity, sygnały i etykiety klasyfikatora, reguła dwóch głosów, prompt przeniesienia |
 | `hooks/next.ts` | Prompt i parsowanie propozycji „Co dalej?” |
 | `hooks/recent.ts` | Odczyt handoffu, tytułów sesji z transkryptów, daty względne |
-| `hooks/register.test.ts` | Testy logiki, panelu na terminalu i desktopie, propozycji, „ostatnio”, doradcy i przenoszenia (25) |
-| `types/index.d.ts` | Kontrakt stanu `kokpit.activity`, `.session`, `.place`, `.next`, `.recent` |
+| `hooks/szlif.ts` | Odczyt stanu moda szlif i etykiety sekcji „Szlif promptu” |
+| `hooks/register.test.ts` | Testy logiki, panelu na terminalu i desktopie, propozycji, „ostatnio”, doradcy, przenoszenia i sekcji szlifu (29) |
+| `types/index.d.ts` | Kontrakt stanu `kokpit.activity`, `.session`, `.place`, `.next`, `.recent`, `.szlifAsk` (prośba do moda szlif) |

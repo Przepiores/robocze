@@ -1,10 +1,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, Register } from 'claude-code'
 
 import { EMPTY_PLACE, PLACE_LABELS, classifierText, decide, isChatty, isOfficeAsk, labelFor, limitsFrom, shortPath, withEdit } from './logic'
 import { nextPrompt, parseSuggestions } from './next'
 import { parseHandoff, pickSessions, projectSlug, sessionTitle, when } from './recent'
+import { szlifView } from './szlif'
 
 const label = (place: 'code' | 'cowork' | 'chat') => Object.keys(PLACE_LABELS).find(k => PLACE_LABELS[k] === place)
 const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -356,4 +357,72 @@ describe('place advisor', () => {
     await turn($, w, 'zrób z tych wyników raport do Worda z wykresami')
     expect(w.classified()).toBe(0)
   })
+})
+
+/**
+ * szlif's side of the channel, as small as it gets: it owns `szlif.status`, watches
+ * the pane's `kokpit.szlifAsk`, toasts each ask (an inline plugin shares no memory
+ * with the test) and applies mode and delivery.
+ */
+const fakeSzlif: Register = on => {
+    on('session.start', async ($, e, next) => {
+      await $.state.set({ plugin: 'szlif', key: 'status' } as never, { mode: 'wywiad', deliver: 'podglad', phase: null, last: { original: 'a', improved: 'b', why: 'dodane kryterium' }, stats: {} } as never)
+      return next(e)
+    })
+    on('state.set', { plugin: 'kokpit', key: 'szlifAsk' } as never, async ($, e, next) => {
+      const result = await next(e)
+      const ask = (e as { value?: { action?: string; value?: string } }).value
+      $.ui.toast(`ask ${JSON.stringify(ask)}`)
+      if (ask?.action === 'mode' || ask?.action === 'deliver') {
+        const field = ask.action === 'mode' ? 'mode' : 'deliver'
+        $.clock.after(0, async () => {
+          const now = ((await $.state.get({ plugin: 'szlif', key: 'status' } as never)) as { value: Record<string, unknown> }).value
+          await $.state.set({ plugin: 'szlif', key: 'status' } as never, { ...now, [field]: ask.value } as never)
+        })
+      }
+      return result
+    })
+}
+
+describe('szlif', () => {
+  test('the view reads szlif\'s status and rejects anything else', () => {
+    expect(szlifView(undefined)).toBe(null)
+    expect(szlifView({ mode: 'turbo', deliver: 'auto' })).toBe(null)
+    expect(szlifView({ mode: 'szlif', deliver: 'auto', phase: 'pyta', last: { why: '' } })).toEqual({ mode: 'szlif', deliver: 'auto', phase: 'pyta', lastWhy: 'poprawiony prompt' })
+  })
+
+  test('without the szlif mod the section is not drawn', async ($, on) => {
+    world(on, [label('code')])
+    await $.session.start({ cwd: '/proj' } as never)
+    const ui = await mountPane($)
+    expect(await ui.find({ text: /SZLIF PROMPTU/ })).toBeUndefined()
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`with szlif the section switches its mode and delivery on ${surface}`, { plugins: [{ name: 'szlif', register: fakeSzlif }] }, async ($, on) => {
+      const w = world(on, [label('code')])
+      await $.session.start({ cwd: '/proj' } as never)
+      const ui = await mountPane($, surface)
+      expect(await ui.find({ text: /SZLIF PROMPTU/ })).toBeDefined()
+      expect(await ui.find({ text: /● Wywiad/ })).toBeDefined()
+      expect(await ui.find({ text: /Ostatnio: dodane kryterium/ })).toBeDefined()
+
+      await ui.press({ key: 'szlif:mode:szlif' })
+      await ui.press({ key: 'szlif:deliver:auto' })
+      await ui.press({ key: 'szlif:restore' })
+      await w.clock.advance(10)
+      expect(w.toasts.filter(t => t.startsWith('ask '))).toEqual([
+        'ask {"action":"mode","value":"szlif","seq":1}',
+        'ask {"action":"deliver","value":"auto","seq":2}',
+        'ask {"action":"restore","seq":3}',
+      ])
+      expect(await ui.find({ text: /● Szlif/ })).toBeDefined()
+      expect(await ui.find({ text: /● Auto/ })).toBeDefined()
+
+      await ui.press({ key: 'szlif:mode:off' })
+      await w.clock.advance(10)
+      expect(await ui.find({ text: /jak wpisane/ })).toBeDefined()
+      expect(await ui.find({ text: /Podgląd/ })).toBeUndefined()
+    })
+  }
 })

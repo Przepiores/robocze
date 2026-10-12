@@ -1,7 +1,7 @@
 {
   "name": "kokpit",
-  "version": "0.2.0",
-  "description": "Side pane: what Claude is doing, three suggested next prompts, recent work in the project, session usage and limits, and whether the conversation belongs in Code, Cowork or Chat",
+  "version": "0.3.0",
+  "description": "Side pane: what Claude is doing, three suggested next prompts, switches for the szlif prompt polisher, recent work in the project, session usage and limits, and whether the conversation belongs in Code, Cowork or Chat",
   "author": { "name": "Przepiores" },
   "types": "./types/index.d.ts",
   "userConfig": {

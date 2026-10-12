@@ -72,6 +72,26 @@ export type KokpitRecent = {
   commits: string[]
 }
 
+export type KokpitSzlifMode = 'off' | 'szlif' | 'wywiad'
+export type KokpitSzlifDeliver = 'podglad' | 'auto'
+
+/**
+ * What the pane asks the szlif mod to do. Only szlif's owner writes its state, so the
+ * pane writes its own value and szlif, watching that write, acts on each new `seq`.
+ */
+export type KokpitSzlifAsk =
+  | { seq: number; action: 'mode'; value: KokpitSzlifMode }
+  | { seq: number; action: 'deliver'; value: KokpitSzlifDeliver }
+  | { seq: number; action: 'restore' }
+
+/** The part of szlif's `szlif.status` the pane draws, checked field by field when read. */
+export type KokpitSzlifView = {
+  mode: KokpitSzlifMode
+  deliver: KokpitSzlifDeliver
+  phase: 'analizuje' | 'pyta' | 'sklada' | null
+  lastWhy: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     kokpit: {
@@ -80,6 +100,7 @@ declare module 'claude-code' {
       place: KokpitPlace
       next: KokpitNext
       recent: KokpitRecent
+      szlifAsk: KokpitSzlifAsk | null
     }
   }
 }

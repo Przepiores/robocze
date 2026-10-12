@@ -1,0 +1,30 @@
+{
+  "name": "szlif",
+  "version": "0.1.0",
+  "description": "Polishes each prompt before it is sent: asks clarifying questions when something important is missing, then rewrites it into a clear, scoped prompt you review or send at once",
+  "author": { "name": "Przepiores" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Tryb szlifu (domyślny)",
+      "description": "off: wyłączony; szlif: poprawia prompt bez pytań; wywiad: gdy czegoś ważnego brakuje, najpierw dopytuje",
+      "options": ["off", "szlif", "wywiad"],
+      "default": "wywiad"
+    },
+    "deliver": {
+      "type": "string",
+      "title": "Co z poprawionym promptem",
+      "description": "podglad: wraca do pola, Enter wysyła; auto: od razu idzie do Claude'a",
+      "options": ["podglad", "auto"],
+      "default": "podglad"
+    },
+    "model": {
+      "type": "string",
+      "title": "Kto szlifuje",
+      "description": "sonnet lub haiku: tani model z lekkim kontekstem (ostatnia wymiana, pliki); fork: model sesji z całą rozmową (najlepiej rozumie, kosztuje limit modelu sesji)",
+      "options": ["sonnet", "haiku", "fork"],
+      "default": "sonnet"
+    }
+  }
+}
